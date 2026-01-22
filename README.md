@@ -1,4 +1,4 @@
-# ShelfSight (Shelf-Sight)
+# Shelf Sight
 **Video-Based Grocery Item Identification for Accessibility**  
 TSA Software Development — Regional Submission | Team #: **SDHS~21985-1**
 
