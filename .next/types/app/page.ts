@@ -1,4 +1,4 @@
-// File: /Users/dhruvjadhav/Documents/GitHub/Shelf-Sight/app/page.tsx
+// File: C:\TSA2526\Shelf-Sight\app\page.tsx
 import * as entry from '../../../app/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

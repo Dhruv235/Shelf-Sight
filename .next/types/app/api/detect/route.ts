@@ -1,4 +1,4 @@
-// File: /Users/dhruvjadhav/Documents/GitHub/Shelf-Sight/app/api/detect/route.ts
+// File: C:\TSA2526\Shelf-Sight\app\api\detect\route.ts
 import * as entry from '../../../../../app/api/detect/route.js'
 import type { NextRequest } from 'next/server.js'
 

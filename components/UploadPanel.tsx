@@ -33,17 +33,18 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
   const currentImageUrl = useRef<string | null>(null);
 
   useEffect(() => {
+    // Preload COCO model for fruit/veggie detection
     loadCocoModel().catch(() => {});
   }, []);
 
   async function runFallbackDetection(imageUrl: string): Promise<any[]> {
     if (!isModelLoaded()) {
-      setFallbackStatus("Loading AI model...");
+      setFallbackStatus("Loading fruit/vegetable detector...");
       await loadCocoModel();
     }
 
-    setFallbackStatus("Running fallback detection...");
-    const cocoDetections = await detectFromUrl(imageUrl, 0.4);
+    setFallbackStatus("Scanning for fruits and vegetables...");
+    const cocoDetections = await detectFromUrl(imageUrl, 0.35); // Lower threshold for better fruit/veggie detection
     const matched = matchCocoDetections(cocoDetections, query);
 
     return matched.map((det) => ({
@@ -65,7 +66,7 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
         matchCount: 0,
         matches: [],
         allCount: 0,
-        error: "Please enter a brand name first before uploading an image.",
+        error: "Please enter a brand name or product first before uploading an image.",
       });
       return;
     }
@@ -81,11 +82,13 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
       const imageUrl = URL.createObjectURL(file);
       currentImageUrl.current = imageUrl;
 
+      // Try primary Roboflow detection first (for brand labels)
       const res = await fetch("/api/detect", { method: "POST", body: form });
       const data = await res.json();
 
       if (!res.ok) {
-        setFallbackStatus("Primary detection failed, trying fallback...");
+        // Primary detection completely failed - try COCO fallback for fruits/veggies
+        setFallbackStatus("Primary detection unavailable, trying fruit/vegetable detector...");
         try {
           const fallbackMatches = await runFallbackDetection(imageUrl);
           if (fallbackMatches.length > 0) {
@@ -103,7 +106,7 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
               matchCount: 0,
               matches: [],
               allCount: 0,
-              error: "No products detected. Try a clearer photo with better lighting.",
+              error: "No products detected. Try a clearer photo with better lighting, or check if the item is a packaged brand product or fresh produce.",
             });
           }
         } catch {
@@ -112,36 +115,74 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
             matchCount: 0,
             matches: [],
             allCount: 0,
-            error: data?.error ?? "Detection failed. Please try again.",
+            error: data?.error ?? "Detection failed. Please try again with a clearer image.",
           });
         }
       } else {
-        if (data.matchCount === 0 && data.allCount > 0) {
-          setFallbackStatus("No exact match found, trying AI fallback...");
+        // Primary detection succeeded
+        if (data.matchCount > 0) {
+          // Found brand label matches - return immediately
+          onResult(data);
+        } else if (data.allCount > 0) {
+          // Detected other products but no match for the query
+          // Only try COCO fallback if query might be a fruit/vegetable
+          const isFruitVeggieQuery = isFruitOrVegetableQuery(query);
+          
+          if (isFruitVeggieQuery) {
+            setFallbackStatus("No brand labels found, checking for fresh produce...");
+            try {
+              const fallbackMatches = await runFallbackDetection(imageUrl);
+              if (fallbackMatches.length > 0) {
+                onResult({
+                  ...data,
+                  found: true,
+                  matchCount: fallbackMatches.length,
+                  matches: fallbackMatches,
+                  usedFallback: true,
+                  fallbackMatches: fallbackMatches,
+                });
+              } else {
+                onResult(data); // Return original "not found" result
+              }
+            } catch {
+              onResult(data);
+            }
+          } else {
+            // Query appears to be a brand - don't use COCO fallback
+            onResult(data);
+          }
+        } else {
+          // No detections at all - try COCO as last resort
+          setFallbackStatus("No products detected, trying alternative detector...");
           try {
             const fallbackMatches = await runFallbackDetection(imageUrl);
             if (fallbackMatches.length > 0) {
               onResult({
-                ...data,
                 found: true,
                 matchCount: fallbackMatches.length,
                 matches: fallbackMatches,
+                allCount: fallbackMatches.length,
+                query,
                 usedFallback: true,
-                fallbackMatches: fallbackMatches,
               });
             } else {
-              onResult(data);
+              onResult({
+                found: false,
+                matchCount: 0,
+                matches: [],
+                allCount: 0,
+                error: "No products detected. Try a clearer photo with better lighting.",
+              });
             }
           } catch {
             onResult(data);
           }
-        } else {
-          onResult(data);
         }
       }
     } catch (e: any) {
+      // Network error - try COCO fallback
       if (currentImageUrl.current) {
-        setFallbackStatus("Network error, trying local AI detection...");
+        setFallbackStatus("Network error, trying local detection...");
         try {
           const fallbackMatches = await runFallbackDetection(
             currentImageUrl.current
@@ -170,7 +211,7 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
             matchCount: 0,
             matches: [],
             allCount: 0,
-            error: e?.message ?? "Detection failed. Please try again.",
+            error: e?.message ?? "Detection failed. Please check your connection and try again.",
           });
         }
       } else {
@@ -246,7 +287,11 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
               {fallbackStatus || "Analyzing image..."}
             </p>
             <p className="mt-1 text-xs text-zinc-400">
-              {fallbackStatus ? "Using local AI model" : "Running AI detection"}
+              {fallbackStatus.includes("fruit") || fallbackStatus.includes("vegetable") 
+                ? "Checking for fresh produce" 
+                : fallbackStatus.includes("fallback") || fallbackStatus.includes("alternative")
+                ? "Using backup detector"
+                : "Detecting brand labels"}
             </p>
           </div>
         </div>
@@ -312,17 +357,17 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
             <div>
               <p className="text-xs font-semibold text-zinc-300">Best practices</p>
               <p className="mt-0.5 text-xs text-zinc-500 leading-relaxed">
-                Use clear photos with visible logos and good lighting
+                Use clear photos with visible labels/products and good lighting
               </p>
             </div>
           </div>
 
           <div className="flex items-start gap-2 rounded-xl bg-zinc-950/60 border border-zinc-800/60 p-3">
-            <span className="text-sm">⚡</span>
+            <span className="text-sm">🎯</span>
             <div>
-              <p className="text-xs font-semibold text-zinc-300">Processing time</p>
+              <p className="text-xs font-semibold text-zinc-300">What we detect</p>
               <p className="mt-0.5 text-xs text-zinc-500 leading-relaxed">
-                Results typically appear in 2-5 seconds
+                Brand labels (Sprite, Coke, etc.) & fresh produce (apples, bananas)
               </p>
             </div>
           </div>
@@ -340,5 +385,21 @@ export default function UploadPanel({ query, onResult, onImageSelected }: Props)
         )}
       </div>
     </div>
+  );
+}
+
+// Helper function to determine if query is likely a fruit/vegetable
+function isFruitOrVegetableQuery(query: string): boolean {
+  const fruitVeggieKeywords = [
+    'apple', 'banana', 'orange', 'grape', 'strawberry', 'watermelon', 'pineapple',
+    'mango', 'pear', 'peach', 'plum', 'cherry', 'kiwi', 'lemon', 'lime',
+    'carrot', 'broccoli', 'tomato', 'potato', 'onion', 'pepper', 'lettuce',
+    'cucumber', 'celery', 'spinach', 'cabbage', 'corn', 'peas', 'beans',
+    'fruit', 'vegetable', 'veggie', 'produce', 'fresh'
+  ];
+  
+  const normalizedQuery = query.toLowerCase().trim();
+  return fruitVeggieKeywords.some(keyword => 
+    normalizedQuery.includes(keyword) || keyword.includes(normalizedQuery)
   );
 }

@@ -4,6 +4,7 @@ import * as cocoSsd from "@tensorflow-models/coco-ssd";
 let model: cocoSsd.ObjectDetection | null = null;
 let modelLoading: Promise<cocoSsd.ObjectDetection> | null = null;
 
+// Filter out things that shouldn't be on shelves
 const FILTERED_CLASSES = [
   "person",
   "dog",
@@ -18,10 +19,8 @@ const FILTERED_CLASSES = [
   "giraffe",
 ];
 
-const HIGH_PRIORITY_ITEMS = [
-  "bottle",
-  "cup",
-  "bowl",
+// COCO-SSD is best at detecting these food/produce items
+const PRODUCE_ITEMS = [
   "banana",
   "apple",
   "sandwich",
@@ -30,18 +29,15 @@ const HIGH_PRIORITY_ITEMS = [
   "carrot",
   "pizza",
   "cake",
-  "chair",
-  "potted plant",
-  "book",
-  "clock",
-  "vase",
-  "scissors",
-  "teddy bear",
-  "toothbrush",
-  "cell phone",
-  "laptop",
-  "keyboard",
-  "remote",
+  "donut",
+  "hot dog",
+];
+
+// COCO can detect containers but not brand labels
+const CONTAINER_ITEMS = [
+  "bottle",
+  "cup",
+  "bowl",
   "wine glass",
   "fork",
   "knife",
@@ -119,7 +115,7 @@ function calculateBlurScore(
 
 export async function detectWithCoco(
   imageElement: HTMLImageElement | HTMLCanvasElement,
-  confidenceThreshold = 0.45
+  confidenceThreshold = 0.35
 ): Promise<CocoDetection[]> {
   const cocoModel = await loadCocoModel();
 
@@ -149,7 +145,7 @@ export async function detectWithCoco(
   }
 
   const effectiveThreshold = isBlurry
-    ? confidenceThreshold * 0.8
+    ? confidenceThreshold * 0.85
     : confidenceThreshold;
 
   const predictions = await cocoModel.detect(canvas);
@@ -165,9 +161,10 @@ export async function detectWithCoco(
       const centerX = x + predWidth / 2;
       const centerY = y + predHeight / 2;
 
-      const isPriority = HIGH_PRIORITY_ITEMS.includes(className);
+      // Boost confidence for produce items (COCO's strength)
+      const isProduce = PRODUCE_ITEMS.includes(className);
       const adjustedConfidence = Math.min(
-        pred.score * (isPriority ? 1.1 : 1.0),
+        pred.score * (isProduce ? 1.15 : 1.0),
         1.0
       );
 
@@ -189,7 +186,7 @@ export async function detectWithCoco(
 
 export async function detectFromUrl(
   imageUrl: string,
-  confidenceThreshold = 0.45
+  confidenceThreshold = 0.35
 ): Promise<CocoDetection[]> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -217,19 +214,66 @@ export function matchCocoDetections(
   query: string
 ): CocoDetection[] {
   const normalizedQuery = query.toLowerCase().trim();
-  const queryWords = normalizedQuery.split(/\s+/);
+  const queryWords = normalizedQuery.split(/\s+/).filter(w => w.length >= 3);
 
-  return detections.filter((detection) => {
+  // Build query variations (e.g., "apple" -> ["apple", "apples"])
+  const queryVariations = new Set<string>([normalizedQuery]);
+  
+  // Add plural/singular forms
+  if (normalizedQuery.endsWith('s')) {
+    queryVariations.add(normalizedQuery.slice(0, -1));
+  } else {
+    queryVariations.add(normalizedQuery + 's');
+  }
+
+  // Add individual words from multi-word queries
+  queryWords.forEach(word => queryVariations.add(word));
+
+  const matches = detections.filter((detection) => {
     const detectionClass = detection.class.toLowerCase();
 
-    if (detectionClass.includes(normalizedQuery)) return true;
-    if (normalizedQuery.includes(detectionClass)) return true;
+    // Direct match
+    for (const variant of queryVariations) {
+      if (detectionClass === variant) return true;
+      if (detectionClass.includes(variant)) return true;
+      if (variant.includes(detectionClass)) return true;
+    }
 
+    // Word-by-word matching for compound queries
     for (const word of queryWords) {
-      if (word.length >= 3 && detectionClass.includes(word)) return true;
-      if (word.length >= 3 && detectionClass.startsWith(word)) return true;
+      if (detectionClass.includes(word)) return true;
+      if (word.includes(detectionClass) && detectionClass.length >= 3) return true;
+    }
+
+    // Special handling for common produce aliases
+    const aliases: Record<string, string[]> = {
+      'orange': ['oranges', 'citrus'],
+      'apple': ['apples'],
+      'banana': ['bananas'],
+      'carrot': ['carrots'],
+      'broccoli': ['broccoli'],
+      'tomato': ['tomatoes'],
+    };
+
+    for (const [canonical, aliasList] of Object.entries(aliases)) {
+      if (detectionClass === canonical) {
+        for (const variant of queryVariations) {
+          if (aliasList.includes(variant)) return true;
+        }
+      }
     }
 
     return false;
+  });
+
+  // Sort by confidence, prioritizing produce items
+  return matches.sort((a, b) => {
+    const aIsProduce = PRODUCE_ITEMS.includes(a.class);
+    const bIsProduce = PRODUCE_ITEMS.includes(b.class);
+    
+    if (aIsProduce && !bIsProduce) return -1;
+    if (!aIsProduce && bIsProduce) return 1;
+    
+    return b.confidence - a.confidence;
   });
 }
