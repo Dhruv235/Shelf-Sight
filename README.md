@@ -1,6 +1,6 @@
 # ShelfSight (Shelf-Sight)
 **Video-Based Grocery Item Identification for Accessibility**  
-TSA Software Development — Regional Event | Team #: **SDHS~21985-1**
+TSA Software Development — Regional Submission | Team #: **SDHS~21985-1**
 
 ## How to Run
 ```bash
